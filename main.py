@@ -1,171 +1,89 @@
-from selenium import webdriver
-from selenium.webdriver.support.ui import Select
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.chrome.options import Options
+import warnings
 
-# options = Options()
-# options.headless = True
-# options.add_argument("--window-size=1920,1200")
+import nltk
+import pandas as pd
+import tweepy
+from nltk.corpus import stopwords
+from tweepy import OAuthHandler
 
-# DRIVER_PATH = 'C:/Users/CSUFTitan/Downloads/chromedriver_win32/chromedriver.exe'
-# driver = webdriver.Chrome(executable_path=DRIVER_PATH)
-# driver.get('https://wikipedia.com')
-# search_language = driver.find_element_by_id('searchLanguage')
-# var = search_language.text
-# print(var)
-# Select(search_language).select_by_visible_text('Français')
-# search_textinput = driver.find_element_by_id('searchInput')
-# search_textinput.send_keys('Hrithik Roshan')
-# search_button = driver.find_element_by_xpath('/html/body/div[3]/form/fieldset/button')
-# search_button.click()
-# driver.quit()
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
+# downloading stopwords corpus
+nltk.download('stopwords')
+nltk.download('wordnet')
+nltk.download('vader_lexicon')
+nltk.download('averaged_perceptron_tagger')
+nltk.download('movie_reviews')
+nltk.download('punkt')
+nltk.download('conll2000')
+nltk.download('brown')
+stopwords = set(stopwords.words("english"))
 
-import time
-from csv import DictWriter
-import pprint
-import datetime
-from datetime import date, timedelta
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
+consumer_key = 'khYitpDgJonkCE7IMgFDGIerQ'
+consumer_secret = '1gfrS6A2nk5pgwrArWCHh6DjgnRaJ0bVUBwk30djObVSJMzhlI'
+access_token = '2594292031-cjboHw22k9bbT7EoXLEbFWnQOIvpmhXpGT2j3xh'
+access_token_secret = 'vUJcFMZKAEEx4JJEfJqQYjNfWiYc2PrMy3p6pYzozkOCF'
 
 
-def init_driver(driver_type):
-    if driver_type == 1:
-        driver = webdriver.Firefox()
-    elif driver_type == 2:
-        DRIVER_PATH = 'C:/Users/CSUFTitan/Downloads/chromedriver_win32/chromedriver.exe'
-        driver = webdriver.Chrome(executable_path=DRIVER_PATH)
-        #driver = webdriver.Chrome()
-    elif driver_type == 3:
-        driver = webdriver.Ie()
-    elif driver_type == 4:
-        driver = webdriver.Opera()
-    elif driver_type == 5:
-        driver = webdriver.PhantomJS()
-    driver.wait = WebDriverWait(driver, 5)
-    return driver
+# Classes
+class TwitterClient(object):
+    def __init__(self):
+        try:
+            auth = OAuthHandler(consumer_key, consumer_secret)
+            auth.set_access_token(access_token, access_token_secret)
+            # add hyper parameter 'proxy' if executing from behind proxy "proxy='http://172.22.218.218:8085'"
+            self.api = tweepy.API(auth, wait_on_rate_limit=True, wait_on_rate_limit_notify=True)
 
+        except tweepy.TweepError as e:
+            print("Tweepy Authentication Failed - \n{str(e)}")
 
-def scroll(driver, start_date, end_date, words, lang, max_time=180):
-    languages = { 1: 'en', 2: 'it', 3: 'es', 4: 'fr', 5: 'de', 6: 'ru', 7: 'zh'}
-    url = "https://twitter.com/search?q="
-    for w in words[:-1]:
-        url += "{}%20OR".format(w)
-    url += "{}%20".format(words[-1])
-    url += "since%3A{}%20until%3A{}&".format(start_date, end_date)
-    if lang != 0:
-        url += "l={}&".format(languages[lang])
-    url += "src=typd"
-    print(url)
-    driver.get(url)
-    start_time = time.time()  # remember when we started
-    while (time.time() - start_time) < max_time:
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        print( str(time.time() - start_time) + " < " + str(max_time) )
+    def get_tweets(self, query, max_tweets=1000):
+        # Function to fetch tweets.
+        # empty list to store parsed tweets
+        tweets = []
+        since_id = None
+        max_id = -1
+        tweet_count = 0
+        tweets_per_query = 100
 
-
-def scrape_tweets(driver):
-    try:
-        tweet_divs = driver.page_source
-        obj = (tweet_divs, "html.parser")
-        content = obj.find_all("div", class_="content")
-        print(content)
-
-        print("content printed")
-        print(len(content))
-        for c in content:
-            tweets = c.find("p", class_="tweet-text").strings
-            tweet_text = "".join(tweets)
-            print(tweet_text)
-            print("-----------")
+        while tweet_count < max_tweets:
             try:
-                name = (c.find_all("strong", class_="fullname")[0].string).strip()
-            except AttributeError:
-                name = "Anonymous"
-            date = (c.find_all("span", class_="_timestamp")[0].string).strip()
+                if max_id <= 0:
+                    if not since_id:
+                        new_tweets = self.api.search(q=query, count=tweets_per_query)
+                    else:
+                        new_tweets = self.api.search(q=query, count=tweets_per_query,
+                                                     since_id=since_id)
+                else:
+                    if not since_id:
+                        new_tweets = self.api.search(q=query, count=tweets_per_query,
+                                                     max_id=str(max_id - 1))
+                    else:
+                        new_tweets = self.api.search(q=query, count=tweets_per_query,
+                                                     max_id=str(max_id - 1),
+                                                     since_id=since_id)
+                if not new_tweets:
+                    print("No more tweets found")
+                    break
 
-            datestring = str(c.find_all("span", class_="_timestamp")[0])
-            print(datestring)
-            datestring = datestring[datestring.index("data-time")+11:]
-            datestring = datestring[:datestring.index("\"")]
-            print(datestring)
-            # print(tweet_text)
-            try:
-                write_csv(datestring,tweet_text,name)
-            except:
-                print('csv error')
+                for tweet in new_tweets:
+                    parsed_tweet = {'tweets': tweet.text}
 
-    except Exception as e:
-        print("Something went wrong!")
-        print(e)
-        driver.quit()
+                    # appending parsed tweet to tweets list
+                    if tweet.retweet_count > 0:
+                        # if tweet has retweets, ensure that it is appended only once
+                        if parsed_tweet not in tweets:
+                            tweets.append(parsed_tweet)
+                    else:
+                        tweets.append(parsed_tweet)
 
+                tweet_count += len(new_tweets)
+                print("Downloaded {0} tweets".format(tweet_count))
+                max_id = new_tweets[-1].id
 
-def write_csv_header():
-    with open("twitterData.csv", "w+") as csv_file:
-        fieldnames = ['Date', 'Name', 'Tweets','Tags']
-        writer = DictWriter(csv_file, fieldnames=fieldnames)
-        writer.writeheader()
+            except tweepy.TweepError as e:
+                # Just exit if any error
+                print("Tweepy error : " + str(e))
+                break
 
-def write_csv(date,tweet,name):
-    with open("twitterData.csv", "a+") as csv_file:
-        fieldnames = ['Date', 'Name', 'Tweets','Tags']
-        writer = DictWriter(csv_file, fieldnames=fieldnames)
-        #writer.writeheader()
-        writer.writerow({'Date': date,'Name': name,'Tweets': tweet})
-
-
-
-def make_csv(data):
-    l = len(data['date'])
-    print("count: %d" % l)
-    with open("twitterData.csv", "a+") as file:
-        fieldnames = ['Date', 'Name', 'Tweets']
-        writer = DictWriter(file, fieldnames=fieldnames)
-        writer.writeheader()
-        for i in range(l):
-            writer.writerow({'Date': data['date'][i],
-                            'Name': data['name'][i],
-                            'Tweets': data['tweet'][i],
-                            })
-
-
-def get_all_dates(start_date, end_date):
-    dates = []
-    start_date = datetime.datetime.strptime(start_date, "%Y-%m-%d")
-    end_date = datetime.datetime.strptime(end_date, "%Y-%m-%d")
-    step = timedelta(days=1)
-    while start_date <= end_date:
-        dates.append(str(start_date.date()))
-        start_date += step
-
-    return dates
-
-
-def main():
-    driver_type = int(input("1) Firefox | 2) Chrome | 3) IE | 4) Opera | 5) PhantomJS\nEnter the driver you want to use: "))
-    wordsToSearch = input("Enter the words: ").split(',')
-    for w in wordsToSearch:
-        w = w.strip()
-    start_date = input("Enter the start date in (YYYY-MM-DD): ")
-    end_date = input("Enter the end date in (YYYY-MM-DD): ")
-
-    lang = int(input("0) All Languages 1) English | 2) Italian | 3) Spanish | 4) French | 5) German | 6) Russian | 7) Chinese\nEnter the language you want to use: "))
-    all_dates = get_all_dates(start_date, end_date)
-    print(all_dates)
-    write_csv_header()
-    for i in range(len(all_dates) - 1):
-        driver = init_driver(driver_type)
-        scroll(driver, str(all_dates[i]), str(all_dates[i + 1]), wordsToSearch, lang)
-        scrape_tweets(driver)
-        time.sleep(5)
-        print("The tweets for {} are ready!".format(all_dates[i]))
-        driver.quit()
-
-
-if __name__ == "__main__":
-    main()
+        return pd.DataFrame(tweets)
