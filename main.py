@@ -6,6 +6,7 @@ import pandas as pd
 import seaborn as sns
 import tweepy
 from textblob import TextBlob
+from textblob.en.np_extractors import ConllExtractor
 from tweepy import OAuthHandler
 from wordcloud import WordCloud
 
@@ -101,6 +102,35 @@ class TwitterClient(object):
         return pd.DataFrame(tweets)
 
 
+class PhraseExtractHelper(object):
+    def __init__(self):
+        self.lemmatizer = nltk.WordNetLemmatizer()
+        self.stemmer = nltk.stem.porter.PorterStemmer()
+
+    def leaves(self, tree):
+        for subtree in tree.subtrees(filter=lambda t: t.label() == 'NP'):
+            yield subtree.leaves()
+
+    def normalise(self, word):
+        word = word.lower()
+        word = self.lemmatizer.lemmatize(word)
+        return word
+
+    def acceptable_word(self, word):
+        accepted = bool(3 <= len(word) <= 40
+                        and word.lower() not in stopwords
+                        and 'https' not in word.lower()
+                        and 'http' not in word.lower()
+                        and '#' not in word.lower()
+                        )
+        return accepted
+
+    def get_terms(self, tree):
+        for leaf in self.leaves(tree):
+            term = [self.normalise(w) for w, t in leaf if self.acceptable_word(w)]
+            yield term
+
+
 twitter_client = TwitterClient()
 
 tweets_df = twitter_client.get_tweets('Pandemic', max_tweets=1000)
@@ -154,6 +184,47 @@ for i, tokens in enumerate(tokenized_tweet):
     tokenized_tweet[i] = ' '.join(tokens)
 tweets_df['absolute_cleaned_tweets'] = tokenized_tweet
 
+sentence_re = r'(?:(?:[A-Z])(?:.[A-Z])+.?)|(?:\w+(?:-\w+)*)|(?:\$?\d+(?:.\d+)?%?)|(?:...|)(?:[][.,;"\'?():-_`])'
+grammar = r"""
+    NBAR:
+        {<NN.*|JJ>*<NN.*>}  # Nouns and Adjectives, terminated with Nouns
+
+    NP:
+        {<NBAR>}
+        {<NBAR><IN><NBAR>}  # Above, connected with in/of/etc...
+"""
+chunker = nltk.RegexpParser(grammar)
+
+key_phrases = []
+phrase_extract_helper = PhraseExtractHelper()
+
+for index, row in tweets_df.iterrows():
+    toks = nltk.regexp_tokenize(row.cleaned_tweets, sentence_re)
+    postoks = nltk.tag.pos_tag(toks)
+    tree = chunker.parse(postoks)
+
+    terms = phrase_extract_helper.get_terms(tree)
+    tweet_phrases = []
+
+    for term in terms:
+        if len(term):
+            tweet_phrases.append(' '.join(term))
+
+    key_phrases.append(tweet_phrases)
+
+textblob_key_phrases = []
+extractor = ConllExtractor()
+
+for index, row in tweets_df.iterrows():
+    words_without_hash = [word for word in row.cleaned_tweets.split() if '#' not in word.lower()]
+
+    hash_removed_sentence = ' '.join(words_without_hash)
+
+    blob = TextBlob(hash_removed_sentence, np_extractor=extractor)
+    textblob_key_phrases.append(list(blob.noun_phrases))
+
+tweets_df['key_phrases'] = textblob_key_phrases
+
 
 def generate_word_cloud(all_words):
     word_cloud = WordCloud(width=800, height=500, random_state=21, max_font_size=100, relative_scaling=0.5,
@@ -201,6 +272,13 @@ bow_word_vectorizer = CountVectorizer(max_df=0.90, min_df=2, stop_words='english
 bow_word_feature = bow_word_vectorizer.fit_transform(tweets_df['absolute_cleaned_tweets'])
 target_variable = tweets_df['sentiment'].apply(lambda x: 0 if x == 'neg' else 1)
 
+tweets_df2 = tweets_df[tweets_df['key_phrases'].str.len() > 0]
+phrase_sents = tweets_df2['key_phrases'].apply(lambda x: ' '.join(x))
+bow_phrase_vectorizer = CountVectorizer(max_df=0.90, min_df=2)
+bow_phrase_feature = bow_phrase_vectorizer.fit_transform(phrase_sents)
+
+target_variable = tweets_df2['sentiment'].apply(lambda x: 0 if x == 'neg' else 1)
+
 
 def plot_confusion_matrix(matrix):
     plt.clf()
@@ -223,14 +301,15 @@ def plot_confusion_matrix(matrix):
 def naive_model(X_train, X_test, y_train, y_test):
     naive_classifier = GaussianNB()
     naive_classifier.fit(X_train.toarray(), y_train)
-
     predictions = naive_classifier.predict(X_test.toarray())
-
-    # calculating Accuracy Score
     print(f'Accuracy Score - {accuracy_score(y_test, predictions)}')
     conf_matrix = confusion_matrix(y_test, predictions, labels=[True, False])
     plot_confusion_matrix(conf_matrix)
 
 
-X_train, X_test, y_train, y_test = train_test_split(bow_word_feature, target_variable, test_size=0.3, random_state=272)
+# X_train, X_test, y_train, y_test = train_test_split(bow_word_feature, target_variable, test_size=0.3, random_state=272)
+# naive_model(X_train, X_test, y_train, y_test)
+
+X_train, X_test, y_train, y_test = train_test_split(bow_phrase_feature, target_variable, test_size=0.3,
+                                                    random_state=272)
 naive_model(X_train, X_test, y_train, y_test)
